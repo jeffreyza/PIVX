@@ -110,7 +110,7 @@ size_t CTransaction::DynamicMemoryUsage() const
 
 /* For backward compatibility, the hash is initialized to 0. TODO: remove the need for this default constructor entirely. */
 CTransaction::CTransaction() : vin(), vout(), nVersion(CTransaction::CURRENT_VERSION), nType(TxType::NORMAL), nLockTime(0), hash() {}
-CTransaction::CTransaction(const CMutableTransaction &tx) : vin(tx.vin), vout(tx.vout), nVersion(tx.nVersion), nType(tx.nType), nLockTime(tx.nLockTime), sapData(tx.sapData), extraPayload(tx.extraPayload), hash(ComputeHash()) {}
+CTransaction::CTransaction(const CMutableTransaction& tx) : vin(tx.vin), vout(tx.vout), nVersion(tx.nVersion), nType(tx.nType), nLockTime(tx.nLockTime), sapData(tx.sapData), extraPayload(tx.extraPayload), hash(ComputeHash()) {}
 CTransaction::CTransaction(CMutableTransaction &&tx) : vin(std::move(tx.vin)), vout(std::move(tx.vout)), nVersion(tx.nVersion), nType(tx.nType), nLockTime(tx.nLockTime), sapData(tx.sapData), extraPayload(tx.extraPayload), hash(ComputeHash()) {}
 
 bool CTransaction::HasZerocoinSpendInputs() const
@@ -135,7 +135,8 @@ bool CTransaction::IsCoinStake() const
 {
     if (vin.empty())
         return false;
-
+    if (sapData && !sapData->vShieldedSpend.empty())
+        return false;
     bool fAllowNull = vin[0].IsZerocoinSpend();
     if (vin[0].prevout.IsNull() && !fAllowNull)
         return false;
@@ -146,6 +147,19 @@ bool CTransaction::IsCoinStake() const
 bool CTransaction::HasExchangeAddr() const
 {
     return std::any_of(vout.begin(), vout.end(), [](const auto& txout) { return txout.scriptPubKey.IsPayToExchangeAddress(); });
+}
+
+// Vout[0] must be empty, no transparent input and non empty sapling input and output
+bool CTransaction::IsCoinShieldStake() const
+{
+    if (!sapData)
+        return false;
+    if (sapData->vShieldedSpend.empty())
+        return false;
+    if (!vin.empty())
+        return false;
+
+    return (vout.size() == 1 && vout[0].IsEmpty());
 }
 
 bool CTransaction::HasP2CSOutputs() const

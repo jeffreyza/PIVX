@@ -74,6 +74,10 @@ const struct NUInfo NetworkUpgradeInfo[Consensus::MAX_NETWORK_UPGRADES] = {
                 /*.strInfo =*/ "Deterministic Masternodes",
         },
         {
+                /*.strName =*/ "shield_staking",
+                /*.strInfo =*/ "Shield Staking",
+        },
+        {
                 /*.strName =*/ "Test_dummy",
                 /*.strInfo =*/ "Test dummy info",
         },
