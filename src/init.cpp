@@ -362,7 +362,9 @@ void OnRPCStarted()
 
 void OnRPCStopped()
 {
-    uiInterface.NotifyBlockTip.disconnect(RPCNotifyBlockChange);
+    // Address-of: GCC 13 rejects boost::function::target() when the slot is a
+    // function type rather than a pointer (void* cannot static_cast to a function pointer).
+    uiInterface.NotifyBlockTip.disconnect(&RPCNotifyBlockChange);
     // TODO: remove unused parameter fInitialDownload
     RPCNotifyBlockChange(false, nullptr);
     g_best_block_cv.notify_all();
@@ -1695,7 +1697,7 @@ bool AppInitMain()
         while (!fHaveGenesis && !ShutdownRequested()) {
             condvar_GenesisWait.wait_for(lockG, std::chrono::milliseconds(500));
         }
-        uiInterface.NotifyBlockTip.disconnect(BlockNotifyGenesisWait);
+        uiInterface.NotifyBlockTip.disconnect(&BlockNotifyGenesisWait);
     }
 
     if (ShutdownRequested()) {

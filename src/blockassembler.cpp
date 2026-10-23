@@ -19,7 +19,9 @@
 #include "policy/policy.h"
 #include "pow.h"
 #include "primitives/transaction.h"
+#include "sapling/saplingscriptpubkeyman.h"
 #include "spork.h"
+#include "stakeinput.h"
 #include "timedata.h"
 #include "util/system.h"
 #include "util/validation.h"
@@ -66,8 +68,7 @@ static CMutableTransaction NewCoinbase(const int nHeight, const CScript* pScript
     return txCoinbase;
 }
 
-bool SolveProofOfStake(CBlock* pblock, CBlockIndex* pindexPrev, CWallet* pwallet,
-                       std::vector<CStakeableOutput>* availableCoins, bool stopPoSOnNewBlock)
+bool SolveProofOfStake(CBlock* pblock, CBlockIndex* pindexPrev, CMutableTransaction& txCoinStake, CWallet* pwallet, const std::vector<std::unique_ptr<CStakeableInterface>>& availableCoins, bool stopPoSOnNewBlock)
 {
     boost::this_thread::interruption_point();
 
@@ -77,15 +78,16 @@ bool SolveProofOfStake(CBlock* pblock, CBlockIndex* pindexPrev, CWallet* pwallet
     // Sync wallet before create coinstake
     pwallet->BlockUntilSyncedToCurrentChain();
 
-    CMutableTransaction txCoinStake;
     int64_t nTxNewTime = 0;
-    if (!pwallet->CreateCoinStake(pindexPrev,
-                                  pblock->nBits,
-                                  txCoinStake,
-                                  nTxNewTime,
-                                  availableCoins,
-                                  stopPoSOnNewBlock
-                                  )) {
+    ShieldStakeSignMaterial signMaterial;
+    CStakeableInterface* pStake = pwallet->CreateCoinStake(*pindexPrev,
+        pblock->nBits,
+        txCoinStake,
+        nTxNewTime,
+        availableCoins,
+        stopPoSOnNewBlock,
+        &signMaterial);
+    if (!pStake) {
         LogPrint(BCLog::STAKING, "%s : stake not found\n", __func__);
         return false;
     }
@@ -96,6 +98,7 @@ bool SolveProofOfStake(CBlock* pblock, CBlockIndex* pindexPrev, CWallet* pwallet
     FillBlockPayee(txCoinbase, txCoinStake, pindexPrev, true);
 
     // Sign coinstake
+
     if (!pwallet->SignCoinStake(txCoinStake)) {
         const COutPoint& stakeIn = txCoinStake.vin[0].prevout;
         return error("Unable to sign coinstake with input %s-%d", stakeIn.hash.ToString(), stakeIn.n);
@@ -104,6 +107,14 @@ bool SolveProofOfStake(CBlock* pblock, CBlockIndex* pindexPrev, CWallet* pwallet
     pblock->vtx.emplace_back(MakeTransactionRef(txCoinbase));
     pblock->vtx.emplace_back(MakeTransactionRef(txCoinStake));
     pblock->nTime = nTxNewTime;
+
+    if (pblock->IsProofOfShieldStake()) {
+        auto& shieldStake = *static_cast<CStakeableShieldNote*>(pStake);
+        if (!pwallet->GetSaplingScriptPubKeyMan()->ComputeShieldStakeProof(*pblock, shieldStake, shieldStake.suggestedValue)) {
+            return false;
+        }
+    }
+    pblock->shieldStakeSign = signMaterial;
     return true;
 }
 
@@ -156,14 +167,14 @@ void BlockAssembler::resetBlock()
 }
 
 std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock(const CScript& scriptPubKeyIn,
-                                               CWallet* pwallet,
-                                               bool fProofOfStake,
-                                               std::vector<CStakeableOutput>* availableCoins,
-                                               bool fNoMempoolTx,
-                                               bool fTestValidity,
-                                               CBlockIndex* prevBlock,
-                                               bool stopPoSOnNewBlock,
-                                               bool fIncludeQfc)
+    CWallet* pwallet,
+    bool fProofOfStake,
+    const std::vector<std::unique_ptr<CStakeableInterface>>& availableCoins,
+    bool fNoMempoolTx,
+    bool fTestValidity,
+    CBlockIndex* prevBlock,
+    bool stopPoSOnNewBlock,
+    bool fIncludeQfc)
 {
     resetBlock();
 
@@ -186,9 +197,10 @@ std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock(const CScript& sc
         pblock->nVersion = gArgs.GetArg("-blockversion", pblock->nVersion);
     }
 
+    CMutableTransaction txCoinStake;
+
     // Depending on the tip height, try to find a coinstake who solves the block or create a coinbase tx.
-    if (!(fProofOfStake ? SolveProofOfStake(pblock, pindexPrev, pwallet, availableCoins, stopPoSOnNewBlock)
-                        : CreateCoinbaseTx(pblock, scriptPubKeyIn, pindexPrev))) {
+    if (!(fProofOfStake ? SolveProofOfStake(pblock, pindexPrev, txCoinStake, pwallet, availableCoins, stopPoSOnNewBlock) : CreateCoinbaseTx(pblock, scriptPubKeyIn, pindexPrev))) {
         return nullptr;
     }
 

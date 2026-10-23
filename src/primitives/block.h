@@ -7,10 +7,12 @@
 #ifndef PIVX_PRIMITIVES_BLOCK_H
 #define PIVX_PRIMITIVES_BLOCK_H
 
-#include "primitives/transaction.h"
 #include "keystore.h"
+#include "primitives/transaction.h"
+#include "sapling/sapling_transaction.h"
 #include "serialize.h"
 #include "uint256.h"
+#include <cstddef>
 
 /** Nodes collect new transactions into a block, hash them into a hash tree,
  * and scan through nonce values to make the block's hash satisfy proof-of-work
@@ -23,7 +25,7 @@ class CBlockHeader
 {
 public:
     // header
-    static const int32_t CURRENT_VERSION=11;    // since v5.2.99
+    static const int32_t CURRENT_VERSION = 12; // since v6.0
     int32_t nVersion;
     uint256 hashPrevBlock;
     uint256 hashMerkleRoot;
@@ -75,6 +77,65 @@ public:
     }
 };
 
+class ShieldStakeProof
+{
+public:
+    CAmount amount;
+    uint256 inputCv;
+    uint256 rk;
+    libzcash::GrothProof inputProof = {{0}};
+
+    uint256 outputCv;
+    uint256 epk;
+    uint256 cmu;
+    libzcash::GrothProof outputProof = {{0}};
+    // Binding signature is 64 bytes. A Groth proof here would leave unused
+    // trailing bytes that are not checked by the verifier.
+    std::array<unsigned char, BINDINGSIG_SIZE> sig{{0}};
+
+    void SetNull()
+    {
+        amount = 0;
+        inputCv.SetNull();
+        rk.SetNull();
+        inputProof = {{0}};
+        outputCv.SetNull();
+        epk.SetNull();
+        cmu.SetNull();
+        outputProof = {{0}};
+        sig.fill(0);
+    }
+
+    SERIALIZE_METHODS(ShieldStakeProof, obj)
+    {
+        READWRITE(obj.amount);
+        READWRITE(obj.inputCv);
+        READWRITE(obj.rk);
+        READWRITE(obj.inputProof);
+        READWRITE(obj.epk);
+        READWRITE(obj.cmu);
+        READWRITE(obj.outputCv);
+        READWRITE(obj.outputProof);
+        READWRITE(obj.sig);
+    }
+};
+
+/** Spend-authorizing key and randomness kept only while this process is building
+ *  or re-signing a shield-stake block. Not part of the transaction and not serialized.
+ */
+struct ShieldStakeSignMaterial {
+    Optional<uint256> ask;
+    Optional<uint256> ar;
+    void SetNull()
+    {
+        ask = boost::none;
+        ar = boost::none;
+    }
+    bool IsComplete() const
+    {
+        return ask != boost::none && ar != boost::none;
+    }
+};
 
 class CBlock : public CBlockHeader
 {
@@ -85,8 +146,12 @@ public:
     // ppcoin: block signature - signed by one of the coin base txout[N]'s owner
     std::vector<unsigned char> vchBlockSig;
 
+    // Shield Stake proof bytes only for version 12+
+    ShieldStakeProof shieldStakeProof;
+
     // memory only
     mutable bool fChecked{false};
+    ShieldStakeSignMaterial shieldStakeSign;
 
     CBlock()
     {
@@ -103,8 +168,13 @@ public:
     {
         READWRITEAS(CBlockHeader, obj);
         READWRITE(obj.vtx);
-        if(obj.vtx.size() > 1 && obj.vtx[1]->IsCoinStake())
+        if (obj.vtx.size() > 1 && (obj.vtx[1]->IsCoinStake() || obj.vtx[1]->IsCoinShieldStake()))
             READWRITE(obj.vchBlockSig);
+
+        // Shield Staking Proof
+        if (obj.nVersion >= 12 && obj.IsProofOfShieldStake()) {
+            READWRITE(obj.shieldStakeProof);
+        }
     }
 
     void SetNull()
@@ -113,6 +183,8 @@ public:
         vtx.clear();
         fChecked = false;
         vchBlockSig.clear();
+        shieldStakeProof.SetNull();
+        shieldStakeSign.SetNull();
     }
 
     CBlockHeader GetBlockHeader() const
@@ -133,7 +205,12 @@ public:
 
     bool IsProofOfStake() const
     {
-        return (vtx.size() > 1 && vtx[1]->IsCoinStake());
+        return (vtx.size() > 1 && vtx[1]->IsCoinStake()) || IsProofOfShieldStake();
+    }
+
+    bool IsProofOfShieldStake() const
+    {
+        return (vtx.size() > 1 && vtx[1]->IsCoinShieldStake());
     }
 
     bool IsProofOfWork() const

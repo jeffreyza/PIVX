@@ -4,8 +4,20 @@
 
 #include "blocksignature.h"
 
+#include "hash.h"
+#include "rust/include/librustzcash.h"
 #include "script/standard.h"
 #include "zpiv/zpivmodule.h"
+
+// Header hash commits to the coinstake via the merkle root. Folding in the
+// stake proof means a different proof cannot be swapped under the same signature.
+static uint256 ShieldStakeAuthHash(const CBlock& block)
+{
+    CHashWriter ss(SER_GETHASH, PROTOCOL_VERSION);
+    ss << block.GetHash();
+    ss << block.shieldStakeProof;
+    return ss.GetHash();
+}
 
 static bool GetKeyIDFromUTXO(const CTxOut& utxo, CKeyID& keyIDRet)
 {
@@ -39,6 +51,18 @@ bool SignBlockWithKey(CBlock& block, const CKey& key)
 bool SignBlock(CBlock& block, const CKeyStore& keystore)
 {
     CKeyID keyID;
+
+    if (block.IsProofOfShieldStake()) {
+        block.vchBlockSig.resize(64);
+        if (!block.shieldStakeSign.IsComplete()) {
+            return error("%s: failed to find keys for shield stake", __func__);
+        }
+        const uint256 authHash = ShieldStakeAuthHash(block);
+        if (!librustzcash_sign_block(block.shieldStakeSign.ask->begin(), block.shieldStakeSign.ar->begin(), authHash.begin(), block.vchBlockSig.data()))
+            return error("%s: failed to sign the shield stake block", __func__);
+        return true;
+    }
+
     if (!GetKeyIDFromUTXO(block.vtx[1]->vout[1], keyID)) {
         return error("%s: failed to find key for PoS", __func__);
     }
@@ -54,7 +78,15 @@ bool CheckBlockSignature(const CBlock& block)
 {
     if (block.IsProofOfWork())
         return block.vchBlockSig.empty();
+    if (block.IsProofOfShieldStake()) {
+        uint256 rk = block.vtx[1]->sapData->vShieldedSpend[0].rk;
 
+        if (block.vchBlockSig.size() != 64) {
+            return error("%s: vchBlockSig has not the right length!", __func__);
+        }
+        const uint256 authHash = ShieldStakeAuthHash(block);
+        return librustzcash_verify_block_signature(rk.begin(), authHash.begin(), block.vchBlockSig.data());
+    }
     if (block.vchBlockSig.empty())
         return error("%s: vchBlockSig is empty!", __func__);
 

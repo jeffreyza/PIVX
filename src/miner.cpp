@@ -18,10 +18,12 @@
 #include "policy/feerate.h"
 #include "primitives/block.h"
 #include "primitives/transaction.h"
+#include "stakeinput.h"
 #include "timedata.h"
 #include "util/blockstatecatcher.h"
 #include "util/system.h"
 #include "utilmoneystr.h"
+#include <memory>
 #ifdef ENABLE_WALLET
 #include "wallet/wallet.h"
 #endif
@@ -96,7 +98,7 @@ bool ProcessBlockFound(const std::shared_ptr<const CBlock>& pblock, CWallet& wal
 bool fGenerateBitcoins = false;
 bool fStakeableCoins = false;
 
-void CheckForCoins(CWallet* pwallet, std::vector<CStakeableOutput>* availableCoins)
+void CheckForCoins(CWallet* pwallet, std::vector<std::unique_ptr<CStakeableInterface>>* stakeableCoins)
 {
     if (!pwallet || !pwallet->pStakerStatus)
         return;
@@ -107,7 +109,9 @@ void CheckForCoins(CWallet* pwallet, std::vector<CStakeableOutput>* availableCoi
         if (g_best_block == pwallet->pStakerStatus->GetLastHash())
             return;
     }
-    fStakeableCoins = pwallet->StakeableCoins(availableCoins);
+    // StakeableCoins reports whether any coin was found. The miner loop sleeps
+    // while fStakeableCoins is false, so the flag has to be updated here.
+    fStakeableCoins = pwallet->StakeableCoins(stakeableCoins);
 }
 
 void BitcoinMiner(CWallet* pwallet, bool fProofOfStake)
@@ -122,7 +126,7 @@ void BitcoinMiner(CWallet* pwallet, bool fProofOfStake)
     std::unique_ptr<CReserveKey> pReservekey = fProofOfStake ? nullptr : std::make_unique<CReserveKey>(pwallet);
 
     // Available UTXO set
-    std::vector<CStakeableOutput> availableCoins;
+    std::vector<std::unique_ptr<CStakeableInterface>> availableStakes;
     unsigned int nExtraNonce = 0;
 
     while (fGenerateBitcoins || fProofOfStake) {
@@ -139,13 +143,15 @@ void BitcoinMiner(CWallet* pwallet, bool fProofOfStake)
             }
 
             // update fStakeableCoins
-            CheckForCoins(pwallet, &availableCoins);
+            CheckForCoins(pwallet, &availableStakes);
 
             while ((g_connman && g_connman->GetNodeCount(CConnman::CONNECTIONS_ALL) == 0 && Params().MiningRequiresPeers())
                     || pwallet->IsLocked() || !fStakeableCoins || masternodeSync.NotCompleted()) {
                 MilliSleep(5000);
                 // Do another check here to ensure fStakeableCoins is updated
-                if (!fStakeableCoins) CheckForCoins(pwallet, &availableCoins);
+                if (!fStakeableCoins) {
+                    CheckForCoins(pwallet, &availableStakes);
+                }
             }
 
             //search our map of hashed blocks, see if bestblock has been hashed yet
@@ -168,8 +174,8 @@ void BitcoinMiner(CWallet* pwallet, bool fProofOfStake)
         unsigned int nTransactionsUpdatedLast = mempool.GetTransactionsUpdated();
 
         std::unique_ptr<CBlockTemplate> pblocktemplate((fProofOfStake ?
-                                                        BlockAssembler(Params(), DEFAULT_PRINTPRIORITY).CreateNewBlock(CScript(), pwallet, true, &availableCoins) :
-                                                        CreateNewBlockWithKey(pReservekey, pwallet)));
+                                                            BlockAssembler(Params(), DEFAULT_PRINTPRIORITY).CreateNewBlock(CScript(), pwallet, true, availableStakes) :
+                                                            CreateNewBlockWithKey(pReservekey, pwallet)));
         if (!pblocktemplate) continue;
         std::shared_ptr<CBlock> pblock = std::make_shared<CBlock>(pblocktemplate->block);
 

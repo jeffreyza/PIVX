@@ -379,6 +379,7 @@ public:
     }
 
     bool IsCoinStake() const;
+    bool IsCoinShieldStake() const;
     bool HasP2CSOutputs() const;
     bool HasExchangeAddr() const;
 
