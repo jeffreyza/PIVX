@@ -10,6 +10,7 @@
 #include <list>
 #include <memory>
 #include <set>
+#include <vector>
 
 #include "amount.h"
 #include "coins.h"
@@ -643,6 +644,9 @@ public:
         LOCK(cs);
         return (mapTx.count(hash) != 0);
     }
+
+    /** Mempool tx hashes recorded under proTxHash in mapProTxRefs. */
+    std::vector<uint256> GetProTxRefs(const uint256& proTxHash) const;
 
     bool exists(const COutPoint& outpoint) const
     {

@@ -4,7 +4,10 @@
 
 #include "test/test_pivx.h"
 
+#include "evo/providertx.h"
 #include "policy/feerate.h"
+#include "primitives/transaction.h"
+#include "random.h"
 #include "txmempool.h"
 #include "util/system.h"
 
@@ -577,6 +580,64 @@ BOOST_AUTO_TEST_CASE(MempoolSizeLimitTest)
     // ... unless it has gone all the way to 0 (after getting past 1000/2)
 
     SetMockTime(0);
+}
+
+static CTransaction MakeProRegTx(const ProRegPL& pl)
+{
+    CMutableTransaction mtx;
+    mtx.nVersion = CTransaction::TxVersion::SAPLING;
+    mtx.nType = CTransaction::TxType::PROREG;
+    SetTxPayload(mtx, pl);
+    return CTransaction(mtx);
+}
+
+// mapProTxRefs stores proTxHash -> referring mempool tx. ProRegTx inserts
+// (txid, txid). Removal must erase that same pair. The pre-fix erase looked
+// up (txid, collateralOutpoint.hash) for transparent regs and skipped the
+// ref entirely for shield regs, so the multimap entry survived removeRecursive.
+BOOST_AUTO_TEST_CASE(proreg_mempool_refs_removed)
+{
+    CTxMemPool pool(CFeeRate(0));
+    TestMemPoolEntryHelper entry;
+
+    // Transparent external collateral.
+    {
+        ProRegPL pl;
+        pl.nVersion = ProRegPL::CURRENT_VERSION;
+        pl.collateralOutpoint = COutPoint(GetRandHash(), 0);
+        const CTransaction tx = MakeProRegTx(pl);
+        const uint256 txid = tx.GetHash();
+        pool.addUnchecked(txid, entry.FromTx(tx));
+
+        const std::vector<uint256> refs = pool.GetProTxRefs(txid);
+        BOOST_CHECK_EQUAL(refs.size(), 1U);
+        BOOST_CHECK(refs[0] == txid);
+
+        pool.removeRecursive(tx);
+        BOOST_CHECK(!pool.exists(txid));
+        BOOST_CHECK(pool.GetProTxRefs(txid).empty());
+    }
+
+    // Shield collateral. collateralOutpoint stays null, so only the shield path
+    // records a ref.
+    {
+        ProRegPL pl;
+        pl.nVersion = ProRegPL::CURRENT_VERSION;
+        pl.collateralOutpoint.SetNull();
+        pl.shieldCollateral.input.nullifier = GetRandHash();
+        const CTransaction tx = MakeProRegTx(pl);
+        const uint256 txid = tx.GetHash();
+        BOOST_CHECK(!pl.shieldCollateral.IsNull());
+        pool.addUnchecked(txid, entry.FromTx(tx));
+
+        const std::vector<uint256> refs = pool.GetProTxRefs(txid);
+        BOOST_CHECK_EQUAL(refs.size(), 1U);
+        BOOST_CHECK(refs[0] == txid);
+
+        pool.removeRecursive(tx);
+        BOOST_CHECK(!pool.exists(txid));
+        BOOST_CHECK(pool.GetProTxRefs(txid).empty());
+    }
 }
 
 BOOST_AUTO_TEST_SUITE_END()

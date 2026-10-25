@@ -373,15 +373,17 @@ void CTxMemPool::addUncheckedSpecialTx(const CTransaction& tx)
             ProRegPL pl;
             bool ok = GetTxPayload(tx, pl);
             assert(ok);
+            // mapProTxRefs is proTxHash -> mempool tx that refers to it.
+            // A ProRegTx refers to itself so removeProTxReferences(proTxHash)
+            // evicts it when the collateral or nullifier is spent. The value
+            // must be this txid, and removal must use the same pair.
             if (!pl.collateralOutpoint.hash.IsNull()) {
-            // TODO: recheck this change (but I'm pretty sure that's the right way )
-            mapProTxRefs.emplace(txid, txid);
-            mapProTxCollaterals.emplace(pl.collateralOutpoint, txid);
+                mapProTxRefs.emplace(txid, txid);
+                mapProTxCollaterals.emplace(pl.collateralOutpoint, txid);
             }
             if (!pl.shieldCollateral.IsNull()) {
-            // TODO: recheck this (but I'm pretty sure that's the right way )
-            mapProTxRefs.emplace(txid, txid);
-            mapProTxNullifiers.emplace(pl.shieldCollateral.input.nullifier, txid);
+                mapProTxRefs.emplace(txid, txid);
+                mapProTxNullifiers.emplace(pl.shieldCollateral.input.nullifier, txid);
             }
             mapProTxAddresses.emplace(pl.addr, txid);
             mapProTxPubKeyIDs.emplace(pl.keyIDOwner, txid);
@@ -504,11 +506,12 @@ void CTxMemPool::removeUncheckedSpecialTx(const CTransaction& tx)
             ProRegPL pl;
             bool ok = GetTxPayload(tx, pl);
             assert(ok);
-            if (!pl.collateralOutpoint.IsNull()) {
-                eraseProTxRef(txid, pl.collateralOutpoint.hash);
+            if (!pl.collateralOutpoint.hash.IsNull()) {
+                eraseProTxRef(txid, txid);
                 mapProTxCollaterals.erase(pl.collateralOutpoint);
             }
             if (!pl.shieldCollateral.IsNull()) {
+                eraseProTxRef(txid, txid);
                 mapProTxNullifiers.erase(pl.shieldCollateral.input.nullifier);
             }
             mapProTxAddresses.erase(pl.addr);
@@ -544,6 +547,17 @@ void CTxMemPool::removeUncheckedSpecialTx(const CTransaction& tx)
         }
 
     }
+}
+
+std::vector<uint256> CTxMemPool::GetProTxRefs(const uint256& proTxHash) const
+{
+    LOCK(cs);
+    std::vector<uint256> refs;
+    const auto range = mapProTxRefs.equal_range(proTxHash);
+    for (auto it = range.first; it != range.second; ++it) {
+        refs.emplace_back(it->second);
+    }
+    return refs;
 }
 
 void CTxMemPool::removeUnchecked(txiter it, MemPoolRemovalReason reason)
