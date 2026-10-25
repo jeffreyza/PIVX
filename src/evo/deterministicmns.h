@@ -204,6 +204,7 @@ public:
 
     uint256 proTxHash;
     COutPoint collateralOutpoint;
+    uint256 nullifier;
     uint16_t nOperatorReward;
     CDeterministicMNStateCPtr pdmnState;
 
@@ -213,6 +214,7 @@ public:
         READWRITE(obj.proTxHash);
         READWRITE(VARINT(obj.internalId));
         READWRITE(obj.collateralOutpoint);
+        READWRITE(obj.nullifier);
         READWRITE(obj.nOperatorReward);
         READWRITE(obj.pdmnState);
     }
@@ -368,6 +370,7 @@ public:
     CDeterministicMNCPtr GetMNByOperatorKey(const CBLSPublicKey& pubKey);
     CDeterministicMNCPtr GetMNByCollateral(const COutPoint& collateralOutpoint) const;
     CDeterministicMNCPtr GetValidMNByCollateral(const COutPoint& collateralOutpoint) const;
+    CDeterministicMNCPtr GetMNByNullifier(const uint256& nullifier) const;
     CDeterministicMNCPtr GetMNByService(const CService& service) const;
     CDeterministicMNCPtr GetMNByInternalId(uint64_t internalId) const;
     CDeterministicMNCPtr GetMNPayee() const;

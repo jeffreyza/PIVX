@@ -7,6 +7,8 @@
 
 #include "bls/key_io.h"
 #include "key_io.h"
+#include "primitives/transaction.h"
+#include "uint256.h"
 
 std::string ProRegPL::MakeSignString() const
 {
@@ -39,6 +41,7 @@ void ProRegPL::ToJson(UniValue& obj) const
     obj.pushKV("version", nVersion);
     obj.pushKV("collateralHash", collateralOutpoint.hash.ToString());
     obj.pushKV("collateralIndex", (int)collateralOutpoint.n);
+    obj.pushKV("nullifier", shieldCollateral.input.nullifier.ToString());
     obj.pushKV("service", addr.ToString());
     obj.pushKV("ownerAddress", EncodeDestination(keyIDOwner));
     obj.pushKV("operatorPubKey", bls::EncodePublic(Params(), pubKeyOperator));
@@ -95,6 +98,11 @@ bool ProRegPL::IsTriviallyValid(CValidationState& state) const
 
     if (nOperatorReward > 10000) {
         return state.DoS(10, false, REJECT_INVALID, "bad-protx-operator-reward");
+    }
+    // Shield collateral exists only on version 2 payloads. A non-null proof on
+    // version 1 cannot be represented on the wire.
+    if (!shieldCollateral.IsNull() && nVersion < 2) {
+        return state.DoS(100, false, REJECT_INVALID, "bad-protx-version");
     }
     return true;
 }
@@ -204,6 +212,37 @@ bool ProUpRevPL::IsTriviallyValid(CValidationState& state) const
     if (nReason > ProUpRevPL::REASON_LAST) {
         return state.DoS(100, false, REJECT_INVALID, "bad-protx-reason");
     }
+    return true;
+}
+
+bool IsShieldProReg(const CTransactionRef& tx)
+{
+    if (tx == nullptr) {
+        return false;
+    }
+    if (!tx->IsSpecialTx() || tx->nType != CTransaction::TxType::PROREG) {
+        return false;
+    }
+    ProRegPL pl;
+    if (!GetTxPayload(*tx, pl)) {
+        return false;
+    }
+    return !pl.shieldCollateral.IsNull();
+}
+
+bool GetProRegNullifier(const CTransactionRef& tx, uint256& outNullifier)
+{
+    if (tx == nullptr) {
+        return false;
+    }
+    if (!tx->IsSpecialTx() || tx->nType != CTransaction::TxType::PROREG) {
+        return false;
+    }
+    ProRegPL pl;
+    if (!GetTxPayload(*tx, pl)) {
+        return false;
+    }
+    outNullifier = pl.shieldCollateral.input.nullifier;
     return true;
 }
 
